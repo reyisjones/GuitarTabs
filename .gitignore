@@ -8,6 +8,7 @@
 
 # Security - Sensitive development notes
 DEV_NOTES_SENSITIVE.md
+SECURITY_VULNERABILITY_LOG.md
 
 # Security - User uploads and data
 uploads/
