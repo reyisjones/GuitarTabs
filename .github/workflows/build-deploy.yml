@@ -1,0 +1,130 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  AZURE_REGISTRY: guitartabsregistry.azurecr.io
+  BACKEND_IMAGE_NAME: guitar-tabs-backend
+  FRONTEND_IMAGE_NAME: guitar-tabs-frontend
+  BACKEND_WEBAPP_NAME: guitar-tabs-backend
+  FRONTEND_WEBAPP_NAME: guitar-tabs-frontend
+
+jobs:
+  build-and-test-backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+    
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest pytest-cov
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+    
+    - name: Test with pytest
+      run: |
+        pytest --cov=./ tests/
+    
+    - name: Build Docker image
+      run: |
+        docker build -t ${{ env.AZURE_REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }} .
+    
+    - name: Login to Azure Container Registry
+      uses: azure/docker-login@v1
+      with:
+        login-server: ${{ env.AZURE_REGISTRY }}
+        username: ${{ secrets.REGISTRY_USERNAME }}
+        password: ${{ secrets.REGISTRY_PASSWORD }}
+    
+    - name: Push image to Azure Container Registry
+      run: |
+        docker push ${{ env.AZURE_REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }}
+        docker tag ${{ env.AZURE_REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }} ${{ env.AZURE_REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:latest
+        docker push ${{ env.AZURE_REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:latest
+
+  build-and-test-frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
+    
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v2
+      with:
+        node-version: '18'
+    
+    - name: Set up Bun
+      uses: oven-sh/setup-bun@v1
+      with:
+        bun-version: latest
+    
+    - name: Install dependencies
+      run: bun install
+    
+    - name: Build Storybook
+      run: bun storybook build
+    
+    - name: Run tests
+      run: bun test
+      
+    - name: Build frontend
+      run: bun run build
+    
+    - name: Build Docker image
+      run: |
+        docker build -t ${{ env.AZURE_REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }} .
+    
+    - name: Login to Azure Container Registry
+      uses: azure/docker-login@v1
+      with:
+        login-server: ${{ env.AZURE_REGISTRY }}
+        username: ${{ secrets.REGISTRY_USERNAME }}
+        password: ${{ secrets.REGISTRY_PASSWORD }}
+    
+    - name: Push image to Azure Container Registry
+      run: |
+        docker push ${{ env.AZURE_REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }}
+        docker tag ${{ env.AZURE_REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }} ${{ env.AZURE_REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:latest
+        docker push ${{ env.AZURE_REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:latest
+
+  deploy-to-azure:
+    needs: [build-and-test-backend, build-and-test-frontend]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Login to Azure
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Deploy Backend Container App
+      uses: azure/webapps-deploy@v2
+      with:
+        app-name: ${{ env.BACKEND_WEBAPP_NAME }}
+        images: ${{ env.AZURE_REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }}
+    
+    - name: Deploy Frontend Container App
+      uses: azure/webapps-deploy@v2
+      with:
+        app-name: ${{ env.FRONTEND_WEBAPP_NAME }}
+        images: ${{ env.AZURE_REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }}
